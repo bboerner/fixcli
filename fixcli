@@ -104,7 +104,7 @@ class FIXMessage(object):
                 'MsgSeqNum': str(self.seqnum),
                 'SenderCompID': str(self.sender),
                 'TargetCompID': str(self.target),
-                'SendingTime': self.timestamp,             
+                'SendingTime': self.timestamp,
             });
             if self.msgtype == 'Logon':
                 self.encryption_method = 0;
@@ -169,7 +169,7 @@ class FIXMessage(object):
                 self.pretty += str('  * {0: <30} : {1: <5} : {2}').format(tag_s, tag, value_s) + '\n';
             prettylen = len(max(self.pretty.split('\n'), key=len)) + 1;
             self.pretty = '\n' + str('-' * prettylen) + '\n' + self.pretty + str('-' * prettylen) + '\n';
-            
+
         return;
 
 
@@ -314,7 +314,7 @@ class FIXSession(asyncore.dispatcher):
         if data:
             self._reading = True;
             logger.info('Incoming message: ' + ''.join(data).replace('\x01', '^'));
-            logger.info('-' * 60); 
+            logger.info('-' * 60);
             self.read_buffer += data;
             rcvd = self._decode_fix_msg(self.read_buffer);
             self.read_buffer = self.read_buffer[rcvd:];
@@ -400,7 +400,7 @@ class FIXSession(asyncore.dispatcher):
                     logger.error('failed to find FIX checksum');
                     bytes_parsed -= 5;
             else:
-                logger.error('failed to find FIX header'); 
+                logger.error('failed to find FIX header');
         except:
             logger.error(str(sys.exc_info()));
             pass;
