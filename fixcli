@@ -53,6 +53,16 @@ import signal;
 from collections import OrderedDict;
 import threading;
 
+# ./fixcli:44: DeprecationWarning: The asyncore module is deprecated
+# and will be removed in Python 3.12. The recommended replacement is
+# asyncio.
+#
+# For Python 3.12+ install https://pypi.org/project/pyasyncore/
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', DeprecationWarning)
+    import asyncore
+
 logging.basicConfig(format='%(asctime)s - %(module)s - %(funcName)s - %(levelname)s - %(message)s');
 logger = logging.getLogger(__file__);
 logger.setLevel(logging.CRITICAL);
@@ -391,7 +401,7 @@ class FIXSession(asyncore.dispatcher):
                     else:
                         last = 0;
                     bytes_parsed += 5;
-		    msg_buffer = msg_buffer[(pos+5):];
+                    msg_buffer = msg_buffer[(pos+5):];
                     i += 1;
                 if pos < 0:
                     break;
@@ -503,6 +513,9 @@ def main():
                             type=int, help='Starting Sequence Number');
     main_group.add_argument('-u', '--username', dest='username', metavar='USERNAME', required=False, \
                             type=str, help='Username');
+    main_group.add_argument('--ask-pass', dest='ask_pass', required=False, \
+                            action='store_true', \
+                            help='Ask for password');
     main_group.add_argument('-m', '--mode', dest='mode', metavar='MODE', required=False, \
                             action='append', choices=['logout', 'keepalive', 'dormant', 'gapfill'], \
                             help='Mode of operation (default: dormant)');
