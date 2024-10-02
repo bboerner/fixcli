@@ -75,7 +75,7 @@ class FIXMessage(object):
     FIXMessage holds a single FIX (Financial Information Exchange) message.
     """
 
-    def __init__(self, msgtype=None, seqnum=None, sender=None, target=None, testreqid=None, raw=None):
+    def __init__(self, msgtype=None, seqnum=None, sender=None, target=None, sender_sub_id=None, testreqid=None, raw=None):
         """
         The constructor takes in either FIX message tags/values or raw FIX message. If the
         input is message tags/values, it creates a raw message. If the input is a raw
@@ -85,7 +85,8 @@ class FIXMessage(object):
         :param seqnum: message sequence number, MsgSeqNum <34>
         :param sender: the identity of a firm sending a message, SenderCompID <49>
         :param target: the identity of a firm receiving a message, TargetCompID <56>
-        :param payload: raw FIX message
+        :param sender_sub_id: the sub-identity of a firm sending a message, SenderSubID <50>. Only used for Logon.
+        :param raw: raw FIX message
         :return: either None or integer value
         """
         self._load_msg_schema();
@@ -115,6 +116,7 @@ class FIXMessage(object):
             self.seqnum = seqnum;
             self.sender = sender;
             self.target = target;
+            self.sender_sub_id = sender_sub_id;
             self.fields = OrderedDict({
                 'MsgType': self.schema['MsgType'][self.msgtype],
                 'MsgSeqNum': str(self.seqnum),
@@ -127,6 +129,8 @@ class FIXMessage(object):
                 self.heartbeat = 30;
                 self.fields['EncryptMethod'] = str(self.encryption_method);
                 self.fields['HeartBtInt'] = str(self.heartbeat);
+                if self.sender_sub_id:
+                    self.fields['SenderSubID'] = self.sender_sub_id;
             elif self.msgtype == 'Resend Request':
                 self.fields['BeginSeqNo'] = '1';
                 self.fields['EndSeqNo'] = '0';
@@ -138,11 +142,12 @@ class FIXMessage(object):
                 pass;
             self.version = 'FIX.4.2';
             for f in self.fields:
-                self.body += bytes(str(self.tag_ids[f]) + '=' + self.fields[f]) + b'\x01';
-            self.header = bytes(str(self.tag_ids['BeginString']) + '=' + self.version) + b'\x01';
-            self.header += bytes(str(self.tag_ids['BodyLength']) + '=' + str(len(self.body))) + b'\x01';
-            self.checksum = sum([ord(i) for i in list(self.header + self.body)]) % 256;
-            self.raw = self.header + self.body +  bytes(str(self.tag_ids['CheckSum']) + '=' + str(self.checksum).zfill(3)) + b'\x01';
+                self.body += bytes(str(self.tag_ids[f]) + '=' + self.fields[f], encoding='utf8') + b'\x01';
+            self.header = bytes(str(self.tag_ids['BeginString']) + '=' + self.version, encoding='utf8') + b'\x01';
+            self.header += bytes(str(self.tag_ids['BodyLength']) + '=' + str(len(self.body)), encoding='utf8') + b'\x01';
+            self.checksum = sum(list(self.header + self.body)) % 256;
+            self.raw = self.header + self.body + bytes(str(self.tag_ids['CheckSum']) + '=' + str(self.checksum).zfill(3), encoding='utf8') + b'\x01';
+
         else:
             self.raw = raw;
             self.fields = OrderedDict({});
@@ -162,11 +167,16 @@ class FIXMessage(object):
                             value_s = value + ' (' + self.schema[self.tag_ids[tag]][value] + ')';
                 self.fields[tag_s] = value;
                 if tag_s == 'MsgType':
-                    self.msgtype = self.schema['MsgType'][value];
+                    try:
+                        self.msgtype = self.schema['MsgType'][value];
+                    except Exception as e:
+                        logger.error('unsupported MsgType: ' + value);
                 elif tag_s == 'SenderCompID':
                     self.sender = value;
                 elif tag_s == 'TargetCompID':
                     self.target = value;
+                elif tag_s == 'SenderSubID':
+                    self.sender_sub_id = value;
                 elif tag_s == 'MsgSeqNum':
                     self.seqnum = int(value);
                 elif tag_s == 'BeginString':
@@ -222,6 +232,7 @@ class FIXMessage(object):
             'OrigSendingTime': '122',
             'SenderCompID': '49',
             'TargetCompID': '56',
+            'SenderSubID': '50',
             'SecurityExchange': '207',
             'MsgSeqNum': '34',
             'SendingTime': '52',
@@ -243,9 +254,13 @@ class FIXMessage(object):
                 'Heartbeat':'0',
                 'Test Request':'1',
                 'Resend Request':'2',
+                'Reject':'3',
                 'Sequence Reset':'4',
                 'Logout':'5',
                 'ExecutionReport':'8',
+                'Order-Single':'D',
+                'Order Cancel Request':'F',
+                'Market Data-Incremental Refresh': 'X',
             },
         };
 
@@ -278,6 +293,8 @@ class FIXSession(asyncore.dispatcher):
                 self.sender = value;
             elif key == 'target':
                 self.target = value;
+            elif key == 'sender_sub_id':
+                self.sender_sub_id = value;
             elif key == 'venue':
                 self.venue = value;
             elif key == 'username':
@@ -289,7 +306,7 @@ class FIXSession(asyncore.dispatcher):
             else:
                 logger.error('unsupported function argument: ' + str(key) + '=' + str(value));
 
-        self.sid = self.sender + '-' + self.target;
+        self.sid = self.sender + '-' + self.target
         self.connected = False;
         self.authenticated = False;
         self._reading = False;
@@ -309,8 +326,8 @@ class FIXSession(asyncore.dispatcher):
                 self.seqnum = 1;
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM);
         self.connect((self.host, self.port));
-        self.read_buffer = b'';
-        fixmsg = FIXMessage(msgtype='Logon', seqnum=self.seqnum, sender=self.sender, target=self.target);
+        self.read_buffer = '';
+        fixmsg = FIXMessage(msgtype='Logon', seqnum=self.seqnum, sender=self.sender, target=self.target, sender_sub_id=self.sender_sub_id);
         self.seqnum +=1;
         self.write_buffer = fixmsg.raw;
         return;
@@ -329,6 +346,7 @@ class FIXSession(asyncore.dispatcher):
         data = self.recv(65535);
         if data:
             self._reading = True;
+            data = data.decode(encoding='utf8')
             logger.info('Incoming message: ' + ''.join(data).replace('\x01', '^'));
             logger.info('-' * 60);
             self.read_buffer += data;
@@ -345,8 +363,9 @@ class FIXSession(asyncore.dispatcher):
             return;
         if self.writable():
             self._writing = True;
-            logger.info('Outbound message: ' + str(self.write_buffer).replace('\x01', '^'));
-            self._decode_fix_msg(self.write_buffer);
+            write_buffer_str = self.write_buffer.decode(encoding='utf-8')
+            logger.info('Outbound message: ' + write_buffer_str.replace('\x01', '^'));
+            self._decode_fix_msg(write_buffer_str);
             sent = self.send(self.write_buffer);
             self.write_buffer = self.write_buffer[sent:];
             self._writing = False;
@@ -370,11 +389,12 @@ class FIXSession(asyncore.dispatcher):
             logger.info('Connection closed by ' + self.host);
         else:
             logger.info('Connection closed.');
+
         if not config.has_section(self.sid):
             config.add_section(self.sid);
         config.set(self.sid, 'date', self._get_date());
         config.set(self.sid, 'msgseqnum', str(self.seqnum));
-        with open(cfgfile, 'wb') as f:
+        with open(cfgfile, 'w') as f:
             config.write(f);
         pass;
 
@@ -405,6 +425,7 @@ class FIXSession(asyncore.dispatcher):
                     i += 1;
                 if pos < 0:
                     break;
+
             if len(parts) > 0:
                 if re.search('\x0110=\d{3}(\x01|\x00)?$', msg_buffer):
                     bytes_parsed += len(msg_buffer);
@@ -481,7 +502,7 @@ class FIXSession(asyncore.dispatcher):
             config.set(self.sid, 'date', self._get_date());
             config.set(self.sid, 'msgseqnum', str(self.seqnum));
             logger.info('Saving FIX session information ...');
-            with open(cfgfile, 'wb') as f:
+            with open(cfgfile, 'w') as f:
                 config.write(f);
             logger.info('OK');
         else:
@@ -507,15 +528,14 @@ def main():
                             type=str, help='Sending firm');
     main_group.add_argument('-t', '--target', dest='target', metavar='TARGET_COMP_ID', required=True, \
                             type=str, help='Receiving firm');
+    main_group.add_argument('--sender-sub-id', dest='sender_sub_id', metavar='SENDER_SUBID', required=False, \
+                            type=str, help='Sending firm sub-id');
     main_group.add_argument('-e', '--exchange', dest='venue', metavar='EXCHANGE', required=False, \
                             type=str, help='Trading Venue/Exchange');
     main_group.add_argument('-n', '--seqnum', dest='seqnum', metavar='SEQNUM', required=False, \
                             type=int, help='Starting Sequence Number');
     main_group.add_argument('-u', '--username', dest='username', metavar='USERNAME', required=False, \
                             type=str, help='Username');
-    main_group.add_argument('--ask-pass', dest='ask_pass', required=False, \
-                            action='store_true', \
-                            help='Ask for password');
     main_group.add_argument('-m', '--mode', dest='mode', metavar='MODE', required=False, \
                             action='append', choices=['logout', 'keepalive', 'dormant', 'gapfill'], \
                             help='Mode of operation (default: dormant)');
@@ -553,6 +573,8 @@ def main():
         kwargs['seqnum'] = args.seqnum;
     if args.venue:
         kwargs['venue'] = args.venue;
+    if args.sender_sub_id:
+        kwargs['sender_sub_id'] = args.sender_sub_id;
 
     if args.username:
         kwargs['username'] = args.username;
